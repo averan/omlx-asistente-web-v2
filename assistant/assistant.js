@@ -17,6 +17,7 @@
     maxFileMB: 25,
     modelLabel: '', // nombre visible del modelo; vacío = id real de oMLX
     avatar: '',     // URL de una imagen para la cabecera del panel; vacío = degradado
+    tickets: null,  // { endpoint: '/api/tickets' } activa el botón «Enviar solicitud»
   }, window.OMLX_ASSISTANT || {});
   const base = cfg.baseUrl.replace(/\/+$/, '');
 
@@ -224,7 +225,7 @@
     if (!res.ok) {
       let msg = await res.text();
       try { const j = JSON.parse(msg); msg = j.error?.message || (typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)) || msg; } catch {}
-      const err = new Error(res.status === 401 ? 'La API key no es válida (revisa config.js).' : `oMLX respondió ${res.status}: ${msg}`);
+      const err = new Error(res.status === 401 ? 'La API key no es válida (revisa config.js).' : `${msg} (código ${res.status})`);
       err.status = res.status; throw err;
     }
     return res;
@@ -317,7 +318,7 @@
   function renderAll() {
     list.innerHTML = '';
     addBubble('assistant', cfg.greeting);
-    for (const m of history) addBubble(m.role, m.content, m.attachments);
+    history.forEach((m, i) => { const b = addBubble(m.role, m.content, m.attachments); if (m.role === 'assistant') ticketUI(b, i); });
     const sug = list_(ctx?.sugerencias);
     if (!history.length && sug.length) {
       const box = document.createElement('div');
@@ -479,6 +480,93 @@
     list.append(el); scrollToEnd();
   }
 
+  // ---------- solicitudes (tickets) ----------
+  // El asistente presenta la solicitud con el encabezado TICKET_MARK y campos "- **Campo:** valor".
+  // El widget la lee, muestra «Enviar solicitud» y la envía al servidor, que asigna el número TCK-…
+  const TICKET_MARK = 'solicitud lista para enviar';
+  const TICKET_KEYS = {
+    'tipo': 'tipo', 'titulo': 'titulo', 'categoria': 'categoria', 'descripcion': 'descripcion',
+    'nombre': 'nombre', 'nombre completo': 'nombre', 'correo': 'correo', 'correo electronico': 'correo', 'email': 'correo', 'mail': 'correo',
+    'telefono': 'telefono', 'telefono de contacto': 'telefono', 'prioridad': 'prioridad',
+    'equipo resolutor': 'equipo', 'equipo': 'equipo', 'evidencias': 'evidencias',
+  };
+  const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+  function parseTicket(md) {
+    if (!norm(md).includes(TICKET_MARK)) return null;
+    const t = {};
+    for (const line of md.split('\n')) {
+      const m = line.match(/^\s*(?:[-*•]\s*)?(?:\*\*)?([^:*\n]{3,30}?)(?:\*\*)?\s*:\s*(?:\*\*)?\s*(.+?)\s*$/);
+      const key = m && TICKET_KEYS[norm(m[1])];
+      if (key && !t[key]) t[key] = m[2].replace(/\*\*/g, '').replace(/^\[|\]$/g, '').trim();
+    }
+    return t;
+  }
+  function ticketProblems(t) {
+    const faltan = [['titulo', 'título'], ['descripcion', 'descripción'], ['nombre', 'nombre'], ['correo', 'correo']]
+      .filter(([k]) => !t[k] || /^no informad/i.test(t[k])).map(([, n]) => n);
+    if (faltan.length) return `Faltan datos obligatorios (${faltan.join(', ')}): complétalos en la conversación.`;
+    if (!EMAIL_RE.test(t.correo)) return 'El correo no parece válido: dime el correcto.';
+    return '';
+  }
+  // Pone la barra de acciones (o la marca de «enviada») bajo la última solicitud presentada
+  function ticketUI(bubble, index) {
+    if (!cfg.tickets?.endpoint) return;
+    const msg = history[index];
+    const t = msg && parseTicket(msg.content);
+    if (!t) return;
+    const bar = document.createElement('div');
+    bar.className = 'oa-ticket-bar';
+    if (msg.ticketId) {
+      bar.classList.add('oa-ticket-done');
+      bar.innerHTML = '<span class="oa-ticket-sent"></span>';
+      bar.firstChild.textContent = `✓ Enviada · ${msg.ticketId}`;
+      bubble.append(bar);
+      return;
+    }
+    const laterTicket = history.slice(index + 1).some(m => m.role === 'assistant' && (m.ticketId || parseTicket(m.content)));
+    if (laterTicket) return; // solo la solicitud más reciente se puede enviar
+    list.querySelectorAll('.oa-ticket-bar:not(.oa-ticket-done)').forEach(el => el.remove());
+    const problem = ticketProblems(t);
+    bar.innerHTML = `<button type="button" class="oa-ticket-send">Enviar solicitud</button><button type="button" class="oa-ticket-fix">Corregir</button><span class="oa-ticket-status" role="status"></span>`;
+    const sendB = bar.querySelector('.oa-ticket-send'), status = bar.querySelector('.oa-ticket-status');
+    if (problem) { sendB.disabled = true; status.textContent = problem; }
+    bar.querySelector('.oa-ticket-fix').onclick = () => { input.placeholder = 'Dime qué quieres corregir…'; input.focus(); };
+    sendB.onclick = () => submitTicket(t, index, bar);
+    bubble.append(bar);
+  }
+  async function submitTicket(t, index, bar) {
+    if (ctrl) return;
+    const buttons = bar.querySelectorAll('button'), status = bar.querySelector('.oa-ticket-status');
+    buttons.forEach(b => { b.disabled = true; });
+    status.textContent = 'Enviando…';
+    const convo = history;
+    try {
+      const res = await api(cfg.tickets.endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...t,
+          conversacion: history.slice(0, index + 1).map(m => ({ role: m.role, content: m.content, adjuntos: (m.attachments || []).map(a => a.name) })),
+        }),
+      });
+      const { id } = await res.json();
+      if (history !== convo) return;
+      history[index].ticketId = id;
+      const note = `✅ **Solicitud enviada.** Tu número de ticket es **${id}**. La Mesa de Ayuda te contactará en ${t.correo}.`;
+      history.push({ role: 'assistant', content: note });
+      saveHistory();
+      bar.className = 'oa-ticket-bar oa-ticket-done';
+      bar.innerHTML = '<span class="oa-ticket-sent"></span>';
+      bar.firstChild.textContent = `✓ Enviada · ${id}`;
+      addBubble('assistant', note);
+      input.placeholder = 'Escribe tu pregunta…';
+      scrollToEnd();
+    } catch (e) {
+      buttons.forEach(b => { b.disabled = false; });
+      status.textContent = e.network ? 'No se pudo conectar con el servidor. Inténtalo de nuevo.' : e.message;
+    }
+  }
+
   // ---------- streaming SSE ----------
   async function readSSE(res, onData) {
     const reader = res.body.getReader(), dec = new TextDecoder();
@@ -583,6 +671,7 @@
     }
     history.push({ role: 'assistant', content });
     saveHistory();
+    ticketUI(bubble, history.length - 1);
     scrollToEnd();
   }
 
@@ -632,7 +721,12 @@
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
   });
-  function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; }
+  function autosize() {
+    if (!input.value) { input.style.height = ''; return; } // vacío: alto natural de una línea
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  }
+  window.addEventListener('resize', autosize);
   input.addEventListener('input', () => { autosize(); updateSendState(); });
 
   function reset() {

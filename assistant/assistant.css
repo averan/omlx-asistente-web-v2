@@ -120,6 +120,16 @@
 .oa-typing i:nth-child(3) { animation-delay: .3s; }
 @keyframes oa-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .4; } 30% { transform: translateY(-4px); opacity: 1; } }
 
+/* solicitud lista para enviar */
+.oa-ticket-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--oa-border); }
+.oa-ticket-bar button { font: inherit; font-size: 13px; font-weight: 600; border-radius: 9px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--oa-accent); }
+.oa-ticket-send { background: var(--oa-accent); color: var(--oa-accent-text); }
+.oa-ticket-fix { background: transparent; color: var(--oa-accent); }
+.oa-ticket-bar button:disabled { opacity: .45; cursor: default; }
+.oa-ticket-status { font-size: 12px; color: var(--oa-muted); flex-basis: 100%; }
+.oa-ticket-status:empty { display: none; }
+.oa-ticket-sent { font-size: 12.5px; font-weight: 600; color: var(--oa-ok); }
+
 /* preguntas sugeridas */
 .oa-suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -2px; }
 .oa-suggest button { font: inherit; font-size: 13px; color: var(--oa-accent); background: transparent; border: 1px solid color-mix(in srgb, var(--oa-accent) 40%, transparent); border-radius: 999px; padding: 6px 12px; cursor: pointer; text-align: left; transition: background .15s; }

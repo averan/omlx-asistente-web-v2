@@ -7,14 +7,19 @@ Servidor de la web del asistente + puente seguro hacia oMLX.
   API key en el servidor (nunca llega al navegador).
 - Protege el Mac: límite de tamaño, de max_tokens, de generaciones simultáneas
   y de mensajes por minuto por visitante.
+- Registra las solicitudes validadas por los usuarios (POST /api/tickets) en
+  tickets/tickets.jsonl con un número TCK-0001, TCK-0002…
 
-Uso:  python3 server.py        (configuración en .env, ver .env.example)
+Uso:  python3 server.py            (configuración en .env, ver .env.example)
+      python3 server.py tickets    (lista las solicitudes registradas)
 """
 import http.client
 import json
 import mimetypes
 import os
 import posixpath
+import re
+import sys
 import threading
 import time
 from collections import defaultdict, deque
@@ -52,22 +57,49 @@ PUBLIC_FILES = {'index.html', 'config.js', 'contexto.js'}
 PUBLIC_DIRS = ('css/', 'assistant/', 'img/')
 PROXY_GET = {'/health', '/v1/models', '/v1/models/status'}
 PROXY_CHAT = '/v1/chat/completions'
+TICKETS_API = '/api/tickets'
+TICKETS_FILE = os.path.join(ROOT, 'tickets', 'tickets.jsonl')
+TICKETS_PER_MIN = int(ENV.get('TICKETS_PER_MIN', 5))
+# campo -> largo máximo; los obligatorios se validan aparte
+TICKET_FIELDS = {'tipo': 60, 'titulo': 200, 'categoria': 200, 'descripcion': 4000, 'nombre': 120,
+                 'correo': 200, 'telefono': 60, 'prioridad': 60, 'equipo': 120, 'evidencias': 600}
+TICKET_REQUIRED = ('titulo', 'descripcion', 'nombre', 'correo')
+EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+tickets_lock = threading.Lock()
 
 slots = threading.BoundedSemaphore(MAX_CONCURRENT)
 hits = defaultdict(deque)
 hits_lock = threading.Lock()
 
 
-def rate_limited(ip):
+def rate_limited(key, limit=RATE_PER_MIN):
     now = time.monotonic()
     with hits_lock:
-        q = hits[ip]
+        q = hits[key]
         while q and now - q[0] > 60:
             q.popleft()
-        if len(q) >= RATE_PER_MIN:
+        if len(q) >= limit:
             return True
         q.append(now)
         return False
+
+
+def read_tickets():
+    try:
+        with open(TICKETS_FILE, encoding='utf-8') as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def save_ticket(ticket):
+    """Asigna el siguiente número TCK-NNNN y agrega el ticket al registro."""
+    with tickets_lock:
+        os.makedirs(os.path.dirname(TICKETS_FILE), exist_ok=True)
+        ticket['id'] = f'TCK-{len(read_tickets()) + 1:04d}'
+        with open(TICKETS_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(ticket, ensure_ascii=False) + '\n')
+    return ticket['id']
 
 
 def upstream(method, path, body=None, timeout=600):
@@ -119,6 +151,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == TICKETS_API:
+            return self.create_ticket()
         if path != PROXY_CHAT:
             return self.error(404, 'No encontrado')
         ip, t0 = self.client_ip(), time.time()
@@ -129,6 +163,42 @@ class Handler(BaseHTTPRequestHandler):
         self.error(405, 'Método no permitido')
 
     do_DELETE = do_PATCH = do_PUT
+
+    # ---------- registro de solicitudes ----------
+    def create_ticket(self):
+        ip = self.client_ip()
+        length = int(self.headers.get('Content-Length') or 0)
+        if length <= 0 or length > 1024 * 1024:
+            return self.error(400, 'Solicitud no válida.')
+        if rate_limited('ticket:' + ip, TICKETS_PER_MIN):
+            return self.error(429, 'Has enviado demasiadas solicitudes seguidas. Espera un minuto.')
+        try:
+            data = json.loads(self.rfile.read(length))
+            assert isinstance(data, dict)
+        except (ValueError, AssertionError):
+            return self.error(400, 'Solicitud no válida.')
+        ticket = {k: str(data.get(k) or '').strip()[:n] for k, n in TICKET_FIELDS.items()}
+        missing = [k for k in TICKET_REQUIRED if not ticket[k]]
+        if missing:
+            return self.error(400, 'Faltan datos obligatorios: ' + ', '.join(missing) + '.')
+        if not EMAIL_RE.match(ticket['correo']):
+            return self.error(400, 'El correo no parece válido. Corrígelo y vuelve a enviar.')
+        conv = data.get('conversacion') if isinstance(data.get('conversacion'), list) else []
+        record = {
+            'id': None,
+            'fecha': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+            'estado': 'nuevo',
+            **ticket,
+            'conversacion': [
+                {'rol': str(m.get('role', ''))[:20], 'texto': str(m.get('content', ''))[:4000],
+                 'adjuntos': [str(a)[:200] for a in (m.get('adjuntos') or [])][:10]}
+                for m in conv[-60:] if isinstance(m, dict)
+            ],
+            'ip': ip,
+        }
+        tid = save_ticket(record)
+        print(f'{time.strftime("%H:%M:%S")}  TICKET {tid}  {ticket["tipo"] or "-"} · {ticket["titulo"]} · {ticket["nombre"]} <{ticket["correo"]}>', flush=True)
+        self.send_json(201, {'id': tid, 'fecha': record['fecha']})
 
     # ---------- archivos estáticos ----------
     def serve_static(self, path):
@@ -218,7 +288,20 @@ class Handler(BaseHTTPRequestHandler):
             slots.release()
 
 
+def list_tickets():
+    tickets = read_tickets()
+    if not tickets:
+        print('Aún no hay solicitudes registradas.')
+        return
+    for t in tickets:
+        print(f"{t['id']}  {t['fecha'][:16].replace('T', ' ')}  {t['prioridad'] or '-':<4} {t['tipo'] or '-':<22} {t['titulo']}")
+        print(f"          {t['nombre']} <{t['correo']}>  tel: {t['telefono'] or '-'}  → {t['equipo'] or '-'}")
+    print(f'\n{len(tickets)} solicitud(es). Detalle completo en {os.path.relpath(TICKETS_FILE)}')
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == 'tickets':
+        return list_tickets()
     if not API_KEY:
         print('Aviso: OMLX_API_KEY no está definida en .env; se llamará a oMLX sin clave.')
     srv = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)

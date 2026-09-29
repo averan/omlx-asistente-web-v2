@@ -52,6 +52,22 @@ El script arranca `server.py`, abre un túnel gratuito de Cloudflare y muestra l
 - **Protecciones** (ajustables en `.env`): máximo 2 respuestas generándose a la vez (`MAX_CONCURRENT`), 20 mensajes por minuto por visitante (`RATE_PER_MIN`), respuestas de hasta 1024 tokens (`MAX_TOKENS`) y mensajes de hasta 25 MB (`MAX_BODY_MB`).
 - **Ten en cuenta:** quien tenga la URL usa la potencia de tu Mac. El prompt de sistema (`contexto.js`) se ejecuta en el navegador, así que alguien con conocimientos técnicos podría modificarlo en su propia sesión.
 
+## Solicitudes a la Mesa de Ayuda (tickets)
+
+El asistente atiende dos tipos de pedidos: **problemas** (incidentes) y **solicitudes de servicio** (licencias, accesos a Jira u otros sistemas, VPN, instalación de software, equipos). Reúne los datos, pide nombre y correo (y teléfono opcional), **redacta él mismo la descripción** y presenta la solicitud para que el usuario la valide.
+
+Debajo de la solicitud aparecen los botones **Enviar solicitud** y **Corregir**. Al enviarla, `server.py` la guarda con un número correlativo (`TCK-0001`, `TCK-0002`…) y el usuario ve ese número en el chat.
+
+- Las solicitudes se guardan en `tickets/tickets.jsonl` (una por línea, con la conversación completa). Esa carpeta es privada: no se sirve por la web ni se sube a git.
+- Para verlas:
+
+  ```bash
+  python3 server.py tickets
+  ```
+
+- El catálogo de servicios, la lista de software autorizado, las prioridades y los equipos resolutores se editan en `contexto.js`.
+- Más adelante `server.py` puede reenviar cada solicitud a un sistema real (Jira Service Management, GLPI, Freshdesk, correo…) sin cambiar la web.
+
 ## Configuración (`config.js`)
 
 | Campo | Qué hace |
@@ -61,6 +77,7 @@ El script arranca `server.py`, abre un túnel gratuito de Cloudflare y muestra l
 | `avatar` | Imagen de la cabecera del panel del asistente (p. ej. `img/faena-symbol.png`) |
 | `modelLabel` | Nombre del modelo que se muestra en el panel (p. ej. `Faena-Bot`). Vacío = id real del modelo en oMLX |
 | `systemPrompt` | Instrucciones de comportamiento del modelo |
+| `tickets` | `{ endpoint: '/api/tickets' }` activa el botón «Enviar solicitud». `null` lo desactiva |
 | `maxTokens`, `temperature` | Longitud máxima y creatividad de las respuestas |
 | `enableThinking` | `true` para que los modelos con razonamiento "piensen" antes de responder (más lento) |
 | `maxDocChars` | Máximo de caracteres que se envían de cada documento (el resto se recorta) |

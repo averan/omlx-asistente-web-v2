@@ -1,5 +1,8 @@
 # Configuración privada (API key)
 .env
+
+# Solicitudes registradas (datos personales)
+tickets/
 config.local.js
 
 # Sistema y editor
