@@ -29,10 +29,10 @@ img/                    Logo de Faena (símbolo, texto) y favicons
    O sírvela con un servidor estático (útil si el navegador bloquea algo desde `file://`):
 
    ```bash
-   python3 -m http.server 5173
+   python3 -m http.server 5174
    ```
 
-   y visita http://localhost:5173
+   y visita http://localhost:5174
 
 ## Primeros pasos
 
