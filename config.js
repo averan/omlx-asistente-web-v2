@@ -1,9 +1,8 @@
 // Configuración del asistente. Edita estos valores y recarga la página.
-// La API key NO va aquí: ponla en config.local.js (copia config.local.example.js).
-// Ese archivo no se sube a git. Aviso: la clave queda visible en el navegador; úsalo solo en local.
+// La API key NO va aquí: la usa server.py desde el archivo .env (nunca llega al navegador).
 window.OMLX_ASSISTANT = {
-  baseUrl: 'http://localhost:8000',
-  apiKey: '', // se define en config.local.js
+  // '' = mismo servidor que sirve la web (server.py), que reenvía a oMLX
+  baseUrl: '',
 
   assistantName: 'Asistente',
   // Nombre que se muestra para el modelo (el real se detecta solo y se usa internamente)

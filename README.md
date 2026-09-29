@@ -11,45 +11,52 @@ index.html              Página demo
 css/site.css            Estilos de la página
 assistant/assistant.css Estilos del widget (todo bajo .oa-root)
 assistant/assistant.js  Lógica del widget (se monta solo en <body>)
-config.js               Configuración técnica: URL, modelo, límites…
-config.local.js         Tu API key (privado, ignorado por git)
+config.js               Configuración de la web: nombre, saludo, modelo, límites…
+server.py               Servidor de la web + puente seguro hacia oMLX (guarda la API key)
+publicar.sh             Publica la web en internet con un túnel de Cloudflare
+.env                    Tu API key y ajustes del servidor (privado, ignorado por git)
 contexto.js             Qué sabe el asistente, de qué habla y cómo responde
 img/                    Logo de Faena (símbolo, texto) y favicons
 ```
 
-## Cómo abrirlo
-
-1. Asegúrate de que oMLX está en marcha en `http://localhost:8000`.
-2. Abre la página:
-
-   ```bash
-   open index.html
-   ```
-
-   O sírvela con un servidor estático (útil si el navegador bloquea algo desde `file://`):
-
-   ```bash
-   python3 -m http.server 5174
-   ```
-
-   y visita http://localhost:5174
-
 ## Primeros pasos
 
-Crea tu configuración privada con la API key de oMLX (este archivo no se sube a git):
+1. Asegúrate de que oMLX está en marcha en `http://localhost:8000`.
+2. Crea tu configuración privada con la API key de oMLX (no se sube a git):
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   y edita `.env` para poner tu clave en `OMLX_API_KEY`.
+3. Arranca el servidor y abre http://localhost:5174:
+
+   ```bash
+   python3 server.py
+   ```
+
+La API key vive solo en `.env` y la usa `server.py`: nunca llega al navegador. Por eso abrir `index.html` con doble clic ya no funciona; usa siempre `server.py`.
+
+## Publicar en internet
 
 ```bash
-cp config.local.example.js config.local.js
+brew install cloudflared   # solo la primera vez
+./publicar.sh
 ```
 
-Edita `config.local.js` y pon tu clave en `apiKey`. Si tu oMLX no usa API key, puedes dejar el archivo sin crear.
+El script arranca `server.py`, abre un túnel gratuito de Cloudflare y muestra la URL pública (`https://….trycloudflare.com`). Cualquiera con esa URL puede usar el asistente, que responde con el modelo cargado en **este Mac**. Ctrl+C deja de publicar.
+
+- **Requisitos:** oMLX en marcha y el Mac encendido (el script evita que se duerma mientras publica).
+- **La URL cambia** cada vez que ejecutas el script y no tiene garantía de disponibilidad. Para una dirección fija (p. ej. `soporte.faenacs.com`) se usa un túnel con nombre y una cuenta gratuita de Cloudflare; no hace falta cambiar el código.
+- **Qué se expone:** solo los archivos de la web (`index.html`, `config.js`, `contexto.js`, `css/`, `assistant/`, `img/`) y 4 endpoints de oMLX (`/v1/chat/completions`, `/v1/models`, `/v1/models/status` resumido y `/health`). Todo lo demás, incluido `.env`, da 404.
+- **Protecciones** (ajustables en `.env`): máximo 2 respuestas generándose a la vez (`MAX_CONCURRENT`), 20 mensajes por minuto por visitante (`RATE_PER_MIN`), respuestas de hasta 1024 tokens (`MAX_TOKENS`) y mensajes de hasta 25 MB (`MAX_BODY_MB`).
+- **Ten en cuenta:** quien tenga la URL usa la potencia de tu Mac. El prompt de sistema (`contexto.js`) se ejecuta en el navegador, así que alguien con conocimientos técnicos podría modificarlo en su propia sesión.
 
 ## Configuración (`config.js`)
 
 | Campo | Qué hace |
 |---|---|
-| `baseUrl` | Dirección del servidor oMLX |
-| `apiKey` | API key de oMLX. Va en `config.local.js`, no en `config.js` |
+| `baseUrl` | Dónde está la API. `''` = el mismo `server.py` que sirve la web (recomendado) |
 | `assistantName`, `greeting` | Nombre y saludo inicial del asistente |
 | `avatar` | Imagen de la cabecera del panel del asistente (p. ej. `img/faena-symbol.png`) |
 | `modelLabel` | Nombre del modelo que se muestra en el panel (p. ej. `Faena-Bot`). Vacío = id real del modelo en oMLX |

@@ -218,7 +218,7 @@
     try { res = await fetch(base + path, { ...init, headers }); }
     catch (e) {
       if (e.name === 'AbortError') throw e;
-      const err = new Error(`No puedo conectar con oMLX en ${base}. ¿Está el servidor en marcha?`);
+      const err = new Error(`No puedo conectar con el servidor del asistente (${base || location.origin}). ¿Está en marcha?`);
       err.network = true; throw err;
     }
     if (!res.ok) {

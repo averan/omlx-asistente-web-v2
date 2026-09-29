@@ -1,4 +1,5 @@
 # Configuración privada (API key)
+.env
 config.local.js
 
 # Sistema y editor
