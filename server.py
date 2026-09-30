@@ -14,6 +14,7 @@ Servidor de la web del asistente + puente seguro hacia oMLX.
 Uso:  python3 server.py            (configuración en .env, ver .env.example)
       python3 mcp_tickets.py listar   (lista los tickets registrados)
 """
+import base64
 import http.client
 import json
 import mimetypes
@@ -61,6 +62,16 @@ PROXY_GET = {'/health', '/v1/models', '/v1/models/status'}
 PROXY_CHAT = '/v1/chat/completions'
 TICKETS_API = '/api/tickets'
 TICKETS_MCP_TOOL = ENV.get('TICKETS_MCP_TOOL', 'tickets__crear_ticket')
+ATTACH_MCP_TOOL = ENV.get('ATTACH_MCP_TOOL', 'tickets__adjuntar_archivo')
+# evidencias adjuntas a una solicitud
+MAX_FILES = 10
+MAX_FILE = int(ENV.get('MAX_ADJUNTO_MB', 10)) * 1024 * 1024
+MAX_FILES_TOTAL = int(ENV.get('MAX_ADJUNTOS_TOTAL_MB', 25)) * 1024 * 1024
+TICKET_MAX_BODY = MAX_FILES_TOTAL * 4 // 3 + 2 * 1024 * 1024   # base64 + datos del ticket
+# texto y código: se guardan como text/plain (nunca se ejecutan ni se muestran como HTML)
+TEXT_EXTS = {'txt', 'log', 'out', 'err', 'trace', 'csv', 'tsv', 'json', 'xml', 'md', 'markdown', 'yaml', 'yml', 'ini', 'toml',
+             'sql', 'conf', 'cfg', 'html', 'htm', 'css', 'js', 'jsx', 'ts', 'tsx', 'py', 'java', 'c', 'h', 'cpp', 'cs', 'go',
+             'rs', 'rb', 'php', 'swift', 'kt', 'sh', 'tex', 'rtf'}
 TICKETS_PER_MIN = int(ENV.get('TICKETS_PER_MIN', 5))
 # campo -> largo máximo; los obligatorios se validan aparte
 TICKET_FIELDS = {'tipo': 60, 'titulo': 200, 'categoria': 200, 'descripcion': 4000, 'nombre': 120,
@@ -71,6 +82,70 @@ EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 slots = threading.BoundedSemaphore(MAX_CONCURRENT)
 hits = defaultdict(deque)
 hits_lock = threading.Lock()
+
+
+def sniff_type(data, name):
+    """Tipo MIME según el contenido real del archivo (no el que declara el navegador); None si no se admite."""
+    ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'image/png'
+    if data.startswith(b'\xff\xd8\xff'):
+        return 'image/jpeg'
+    if data[:6] in (b'GIF87a', b'GIF89a'):
+        return 'image/gif'
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp'
+    if data.startswith(b'%PDF-'):
+        return 'application/pdf'
+    if data.startswith(b'PK\x03\x04') and ext == 'docx':
+        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    if data.startswith(b'PK\x03\x04') and ext == 'xlsx':
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    if data.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1') and ext == 'xls':
+        return 'application/vnd.ms-excel'
+    if (ext in TEXT_EXTS or re.fullmatch(r'log\.\d+', ext) or name.lower().endswith(tuple(f'.log.{i}' for i in range(10)))) \
+            and b'\x00' not in data[:8192]:
+        return 'text/plain'
+    return None
+
+
+def parse_files(raw):
+    """Valida las evidencias enviadas. Devuelve (lista, None) o (None, mensaje de error)."""
+    if raw is None:
+        return [], None
+    if not isinstance(raw, list) or len(raw) > MAX_FILES:
+        return None, f'Puedes adjuntar como máximo {MAX_FILES} archivos por solicitud.'
+    files, total = [], 0
+    for f in raw:
+        if not isinstance(f, dict):
+            return None, 'Adjunto no válido.'
+        name = os.path.basename(str(f.get('nombre') or 'archivo').replace('\\', '/'))[:200] or 'archivo'
+        try:
+            data = base64.b64decode(str(f.get('contenido_base64') or ''), validate=True)
+        except ValueError:
+            return None, f'El archivo «{name}» está dañado.'
+        if not data:
+            continue
+        if len(data) > MAX_FILE:
+            return None, f'«{name}» supera el máximo de {MAX_FILE // 1048576} MB por archivo.'
+        total += len(data)
+        if total > MAX_FILES_TOTAL:
+            return None, f'Los adjuntos superan el máximo de {MAX_FILES_TOTAL // 1048576} MB por solicitud.'
+        mime = sniff_type(data, name)
+        if not mime:
+            return None, f'«{name}» no es un tipo de archivo admitido como evidencia.'
+        files.append({'nombre': name, 'tipo': mime, 'contenido_base64': base64.b64encode(data).decode()})
+    return files, None
+
+
+def mcp_call(tool, args, timeout=60):
+    """Ejecuta una herramienta MCP a través de oMLX y devuelve su resultado (JSON). Lanza excepción si falla."""
+    conn, res = upstream('POST', '/v1/mcp/execute', json.dumps({'tool_name': tool, 'arguments': args}).encode(), timeout=timeout)
+    out = json.loads(res.read() or b'{}')
+    conn.close()
+    if res.status != 200 or out.get('is_error'):
+        raise RuntimeError(out.get('error_message') or out.get('content') or out.get('detail') or res.status)
+    return json.loads(out['content']) if isinstance(out.get('content'), str) else out.get('content')
 
 
 def rate_limited(key, limit=RATE_PER_MIN):
@@ -152,8 +227,10 @@ class Handler(BaseHTTPRequestHandler):
     def create_ticket(self):
         ip = self.client_ip()
         length = int(self.headers.get('Content-Length') or 0)
-        if length <= 0 or length > 1024 * 1024:
+        if length <= 0:
             return self.error(400, 'Solicitud no válida.')
+        if length > TICKET_MAX_BODY:
+            return self.error(413, f'Los adjuntos superan el máximo de {MAX_FILES_TOTAL // 1048576} MB por solicitud.')
         if rate_limited('ticket:' + ip, TICKETS_PER_MIN):
             return self.error(429, 'Has enviado demasiadas solicitudes seguidas. Espera un minuto.')
         try:
@@ -167,6 +244,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.error(400, 'Faltan datos obligatorios: ' + ', '.join(missing) + '.')
         if not EMAIL_RE.match(ticket['correo']):
             return self.error(400, 'El correo no parece válido. Corrígelo y vuelve a enviar.')
+        files, problem = parse_files(data.get('archivos'))
+        if problem:
+            return self.error(400, problem)
         conv = data.get('conversacion') if isinstance(data.get('conversacion'), list) else []
         args = {
             **ticket,
@@ -179,19 +259,22 @@ class Handler(BaseHTTPRequestHandler):
         }
         # registro en la base de datos a través de MCP (oMLX ejecuta la herramienta del servidor «tickets»)
         try:
-            conn, res = upstream('POST', '/v1/mcp/execute',
-                                 json.dumps({'tool_name': TICKETS_MCP_TOOL, 'arguments': args}).encode(), timeout=30)
-            out = json.loads(res.read() or b'{}')
-            conn.close()
-            if res.status != 200 or out.get('is_error'):
-                raise RuntimeError(out.get('error_message') or out.get('content') or out.get('detail') or res.status)
-            result = json.loads(out['content']) if isinstance(out.get('content'), str) else out.get('content')
+            result = mcp_call(TICKETS_MCP_TOOL, args, timeout=30)
             tid, fecha = result['id'], result['fecha']
         except Exception as e:  # noqa: BLE001 — cualquier fallo del registro se informa igual al usuario
             print(f'{time.strftime("%H:%M:%S")}  TICKET ERROR  {e}', flush=True)
             return self.error(503, 'No se pudo registrar la solicitud en este momento. Inténtalo en unos minutos.')
-        print(f'{time.strftime("%H:%M:%S")}  TICKET {tid}  {ticket["tipo"] or "-"} · {ticket["titulo"]} · {ticket["nombre"]} <{ticket["correo"]}>', flush=True)
-        self.send_json(201, {'id': tid, 'fecha': fecha})
+        saved, failed = 0, []
+        for f in files:  # evidencias: una llamada MCP por archivo
+            try:
+                mcp_call(ATTACH_MCP_TOOL, {'ticket_id': tid, **f}, timeout=120)
+                saved += 1
+            except Exception as e:  # noqa: BLE001
+                failed.append(f['nombre'])
+                print(f'{time.strftime("%H:%M:%S")}  ADJUNTO ERROR  {tid} {f["nombre"]}: {e}', flush=True)
+        print(f'{time.strftime("%H:%M:%S")}  TICKET {tid}  {ticket["tipo"] or "-"} · {ticket["titulo"]} · {ticket["nombre"]} <{ticket["correo"]}>'
+              + (f'  📎 {saved}' if saved else ''), flush=True)
+        self.send_json(201, {'id': tid, 'fecha': fecha, 'adjuntos': saved, 'adjuntos_fallidos': failed})
 
     # ---------- archivos estáticos ----------
     def serve_static(self, path):

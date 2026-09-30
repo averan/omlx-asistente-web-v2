@@ -86,6 +86,14 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: v
 .bubble.user { align-self: flex-end; background: var(--accent-soft); }
 .bubble.assistant { align-self: flex-start; background: var(--surface-2); }
 .bubble .att { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.files { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.file { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface-2); text-decoration: none; color: inherit; display: flex; flex-direction: column; }
+.file:hover { border-color: var(--accent); }
+.file .thumb { height: 100px; display: grid; place-items: center; background: var(--surface); font-size: 30px; }
+.file .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.file .info { padding: 7px 9px; font-size: 12px; }
+.file .info b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.clip { color: var(--muted); font-size: 12px; margin-left: 6px; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20; }
 .toast.show { opacity: 1; }
 @media (max-width: 800px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } main, .bar { padding-left: 16px; padding-right: 16px; } }
@@ -159,7 +167,7 @@ async function load() {
       el('td', { className: 'muted', textContent: fmt(t.fecha) }),
       el('td', {}, estadoBadge(t.estado)),
       el('td', {}, prio(t.prioridad)),
-      el('td', { className: 'title', textContent: t.titulo }),
+      el('td', { className: 'title' }, t.titulo, t.adjuntos ? el('span', { className: 'clip', textContent: `📎 ${t.adjuntos}`, title: `${t.adjuntos} archivo(s) de evidencia` }) : ''),
       el('td', {}, el('div', { textContent: t.nombre }), el('div', { className: 'muted', textContent: t.correo })),
       el('td', { className: 'muted', textContent: t.equipo || '-' }));
     if (t.id === current) tr.classList.add('sel');
@@ -218,6 +226,19 @@ async function openTicket(id) {
   body.append(el('h3', { textContent: 'Gestionar' }),
     el('div', { className: 'actions' }, el('div', { className: 'row' }, el('label', { className: 'muted', textContent: 'Estado' }), sel), txt, el('div', { className: 'row' }, save, msg)));
 
+  if (t.adjuntos?.length) {
+    const grid = el('div', { className: 'files' });
+    const size = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+    for (const a of t.adjuntos) {
+      const isImg = /^image\/(png|jpeg|gif|webp)$/.test(a.tipo);
+      const icon = a.tipo === 'application/pdf' ? '📕' : /sheet|excel/.test(a.tipo) ? '📊' : /word/.test(a.tipo) ? '📘' : '📄';
+      const link = el('a', { className: 'file', href: `/api/adjuntos/${a.id}${isImg ? '' : '?descargar'}`, target: '_blank', rel: 'noopener', title: `${a.nombre}\nSHA-256: ${a.sha256}` },
+        el('div', { className: 'thumb' }, isImg ? el('img', { src: `/api/adjuntos/${a.id}`, alt: a.nombre, loading: 'lazy' }) : icon),
+        el('div', { className: 'info' }, el('b', { textContent: a.nombre }), el('span', { className: 'muted', textContent: `${size(a.tamano)} · ${isImg ? 'ver' : 'descargar'}` })));
+      grid.append(link);
+    }
+    body.append(el('h3', { textContent: `Evidencias (${t.adjuntos.length})` }), grid);
+  }
   if (t.comentarios.length) {
     const ul = el('ul', { className: 'timeline' });
     for (const c of t.comentarios) ul.append(el('li', {}, el('div', { className: 'when', textContent: fmt(c.fecha) }), el('div', { textContent: c.texto })));

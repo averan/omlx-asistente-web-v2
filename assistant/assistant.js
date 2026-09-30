@@ -35,6 +35,7 @@
   let detecting = null;
   let ctrl = null;
   let pending = []; // adjuntos a la espera de enviarse
+  const originals = new Map(); // fid -> File original (solo en memoria, para guardarlo como evidencia)
   const modelName = () => cfg.modelLabel || model;
 
   // ---------- contexto (contexto.js) ----------
@@ -412,7 +413,7 @@
 
   function addFiles(files) {
     for (const file of files) {
-      const item = { id: Math.random().toString(36).slice(2), name: file.name || 'imagen-pegada.png', size: file.size, status: 'loading' };
+      const item = { id: Math.random().toString(36).slice(2), name: file.name || 'imagen-pegada.png', size: file.size, status: 'loading', file };
       pending.push(item);
       readAttachment(file)
         .then(r => Object.assign(item, r, { status: 'ready' }))
@@ -534,25 +535,56 @@
     sendB.onclick = () => submitTicket(t, index, bar);
     bubble.append(bar);
   }
+  // Reúne los archivos adjuntos de la conversación para guardarlos como evidencia del ticket.
+  // Usa el original si sigue en memoria; si no (p. ej. tras recargar), la imagen reducida o el texto extraído.
+  const EVIDENCE_IMAGE = /^image\/(png|jpeg|gif|webp)$/;
+  const MAX_EVIDENCE = 10 * 1048576, MAX_EVIDENCE_TOTAL = 25 * 1048576;
+  const toBase64 = blob => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = ko; r.readAsDataURL(blob); });
+  async function evidenceFiles(index) {
+    const archivos = [], omitidos = [];
+    let total = 0;
+    for (const m of history.slice(0, index + 1)) {
+      for (const a of (m.role === 'user' && m.attachments) || []) {
+        const file = originals.get(a.fid);
+        let nombre = a.name, contenido = null;
+        if (file && file.size <= MAX_EVIDENCE && (a.type !== 'image' || EVIDENCE_IMAGE.test(file.type))) contenido = await toBase64(file);
+        else if (a.type === 'image' && a.url) { contenido = a.url.split(',')[1]; if (!/\.(jpe?g|png|gif|webp)$/i.test(nombre)) nombre += '.jpg'; }
+        else if (a.text) { contenido = await toBase64(new Blob([a.text], { type: 'text/plain' })); nombre += ' (texto extraído).txt'; }
+        const size = contenido ? contenido.length * 3 / 4 : 0;
+        if (!contenido || archivos.length >= 10 || total + size > MAX_EVIDENCE_TOTAL) { omitidos.push(a.name); continue; }
+        total += size;
+        archivos.push({ nombre, contenido_base64: contenido });
+      }
+    }
+    return { archivos, omitidos };
+  }
   async function submitTicket(t, index, bar) {
     if (ctrl) return;
     const buttons = bar.querySelectorAll('button'), status = bar.querySelector('.oa-ticket-status');
     buttons.forEach(b => { b.disabled = true; });
-    status.textContent = 'Enviando…';
     const convo = history;
     try {
+      status.textContent = 'Preparando evidencias…';
+      const { archivos, omitidos } = await evidenceFiles(index);
+      status.textContent = archivos.length ? `Enviando solicitud y ${archivos.length} archivo(s)…` : 'Enviando…';
       const res = await api(cfg.tickets.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...t,
+          // la lista de evidencias sale de los archivos reales, no de lo que haya escrito el modelo
+          evidencias: archivos.length ? archivos.map(f => f.nombre).join(', ') : (omitidos.length ? omitidos.join(', ') : 'ninguna'),
           conversacion: history.slice(0, index + 1).map(m => ({ role: m.role, content: m.content, adjuntos: (m.attachments || []).map(a => a.name) })),
+          archivos,
         }),
       });
-      const { id } = await res.json();
+      const { id, adjuntos = 0, adjuntos_fallidos: fallidos = [] } = await res.json();
       if (history !== convo) return;
       history[index].ticketId = id;
-      const note = `✅ **Solicitud enviada.** Tu número de ticket es **${id}**. La Mesa de Ayuda te contactará en ${t.correo}.`;
+      const noGuardados = [...omitidos, ...fallidos];
+      const note = `✅ **Solicitud enviada.** Tu número de ticket es **${id}**. La Mesa de Ayuda te contactará en ${t.correo}.`
+        + (adjuntos ? ` Se guardaron ${adjuntos} archivo(s) como evidencia.` : '')
+        + (noGuardados.length ? ` No se pudieron guardar: ${noGuardados.join(', ')}.` : '');
       history.push({ role: 'assistant', content: note });
       saveHistory();
       bar.className = 'oa-ticket-bar oa-ticket-done';
@@ -686,7 +718,10 @@
       showError(`El modelo ${modelName()} solo entiende texto y no puede ver imágenes. Carga un modelo de visión (VLM) en oMLX o quita las imágenes.`);
       return;
     }
-    const attachments = ready.map(({ type, name, info, url, text }) => (type === 'image' ? { type, name, info, url } : { type, name, info, text }));
+    const attachments = ready.map(({ id, file, type, name, info, url, text }) => {
+      originals.set(id, file);
+      return type === 'image' ? { fid: id, type, name, info, url } : { fid: id, type, name, info, text };
+    });
     pending = []; renderTray();
     input.value = ''; autosize(); updateSendState();
     list.querySelector('.oa-suggest')?.remove();

@@ -6,12 +6,15 @@ Habla el protocolo MCP por stdio (JSON-RPC, un mensaje por línea) usando solo l
 biblioteca estándar, así que funciona con el Python 3.9 de macOS sin instalar nada.
 
 Herramientas:  crear_ticket · listar_tickets · obtener_ticket · actualizar_ticket
+               adjuntar_archivo · obtener_adjunto  (evidencias guardadas como BLOB)
 Base de datos: tickets/tickets.db  (carpeta privada, ignorada por git)
 
 Uso:
   python3 mcp_tickets.py           servidor MCP (lo arranca oMLX, Claude Desktop, etc.)
   python3 mcp_tickets.py listar    muestra los tickets en la terminal
 """
+import base64
+import hashlib
 import json
 import os
 import re
@@ -31,6 +34,8 @@ CAMPOS = {'tipo': 60, 'titulo': 200, 'categoria': 200, 'descripcion': 4000, 'nom
           'correo': 200, 'telefono': 60, 'prioridad': 60, 'equipo': 120, 'evidencias': 600}
 OBLIGATORIOS = ('titulo', 'descripcion', 'nombre', 'correo')
 EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+MAX_ADJUNTO = int(os.environ.get('MAX_ADJUNTO_MB', 10)) * 1024 * 1024
+MAX_ADJUNTOS_POR_TICKET = 10
 
 
 class ToolError(Exception):
@@ -61,7 +66,18 @@ def connect():
             fecha      TEXT NOT NULL,
             texto      TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS adjuntos (
+            num        INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id  TEXT NOT NULL REFERENCES tickets(id),
+            fecha      TEXT NOT NULL,
+            nombre     TEXT NOT NULL,
+            tipo       TEXT NOT NULL,
+            tamano     INTEGER NOT NULL,
+            sha256     TEXT NOT NULL,
+            contenido  BLOB NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_tickets_estado ON tickets(estado);
+        CREATE INDEX IF NOT EXISTS idx_adjuntos_ticket ON adjuntos(ticket_id);
     """)
     import_legacy(db)
     return db
@@ -116,7 +132,20 @@ def import_legacy(db):
 
 
 def resumen(row):
-    return {k: row[k] for k in ('id', 'fecha', 'estado', 'prioridad', 'tipo', 'titulo', 'equipo', 'nombre', 'correo')}
+    r = {k: row[k] for k in ('id', 'fecha', 'estado', 'prioridad', 'tipo', 'titulo', 'equipo', 'nombre', 'correo')}
+    r['adjuntos'] = row['n_adjuntos'] if 'n_adjuntos' in row.keys() else 0
+    return r
+
+
+def lista_adjuntos(db, ticket_id):
+    return [dict(r) for r in db.execute(
+        'SELECT num AS id, nombre, tipo, tamano, sha256, fecha FROM adjuntos WHERE ticket_id = ? ORDER BY num', (ticket_id,))]
+
+
+def leer_adjunto(db, adjunto_id):
+    """Devuelve (nombre, tipo, bytes) de un adjunto, o None si no existe."""
+    row = db.execute('SELECT nombre, tipo, contenido FROM adjuntos WHERE num = ?', (int(adjunto_id),)).fetchone()
+    return (row['nombre'], row['tipo'], bytes(row['contenido'])) if row else None
 
 
 # ---------------------------------------------------------------- herramientas
@@ -135,7 +164,8 @@ def tool_listar_tickets(db, args):
         where.append('(titulo LIKE ? OR descripcion LIKE ? OR nombre LIKE ? OR correo LIKE ?)')
         params += ['%' + args['texto'] + '%'] * 4
     limite = max(1, min(int(args.get('limite') or 20), 200))
-    sql = 'SELECT * FROM tickets' + (' WHERE ' + ' AND '.join(where) if where else '') + ' ORDER BY num DESC LIMIT ?'
+    sql = ('SELECT t.*, (SELECT COUNT(*) FROM adjuntos a WHERE a.ticket_id = t.id) AS n_adjuntos FROM tickets t'
+           + (' WHERE ' + ' AND '.join(where) if where else '') + ' ORDER BY num DESC LIMIT ?')
     rows = db.execute(sql, params + [limite]).fetchall()
     total = db.execute('SELECT COUNT(*) FROM tickets' + (' WHERE ' + ' AND '.join(where) if where else ''), params).fetchone()[0]
     return {'total': total, 'tickets': [resumen(r) for r in rows]}
@@ -150,7 +180,40 @@ def tool_obtener_ticket(db, args):
     t['conversacion'] = json.loads(t['conversacion']) if t['conversacion'] else []
     t['comentarios'] = [dict(fecha=c['fecha'], texto=c['texto']) for c in
                         db.execute('SELECT fecha, texto FROM comentarios WHERE ticket_id = ? ORDER BY num', (t['id'],))]
+    t['adjuntos'] = lista_adjuntos(db, t['id'])
     return t
+
+
+def tool_adjuntar_archivo(db, args):
+    tid = str(args.get('ticket_id', '')).upper()
+    if not db.execute('SELECT 1 FROM tickets WHERE id = ?', (tid,)).fetchone():
+        raise ToolError(f'No existe el ticket {tid}')
+    nombre = os.path.basename(str(args.get('nombre') or '').replace('\\', '/')).strip()[:200] or 'archivo'
+    tipo = str(args.get('tipo') or 'application/octet-stream')[:100]
+    try:
+        data = base64.b64decode(str(args.get('contenido_base64') or ''), validate=True)
+    except ValueError:
+        raise ToolError('contenido_base64 no es base64 válido')
+    if not data:
+        raise ToolError('El archivo está vacío')
+    if len(data) > MAX_ADJUNTO:
+        raise ToolError(f'El archivo supera el máximo de {MAX_ADJUNTO // 1048576} MB')
+    if db.execute('SELECT COUNT(*) FROM adjuntos WHERE ticket_id = ?', (tid,)).fetchone()[0] >= MAX_ADJUNTOS_POR_TICKET:
+        raise ToolError(f'El ticket ya tiene el máximo de {MAX_ADJUNTOS_POR_TICKET} adjuntos')
+    sha = hashlib.sha256(data).hexdigest()
+    cur = db.execute('INSERT INTO adjuntos (ticket_id, fecha, nombre, tipo, tamano, sha256, contenido) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                     (tid, now(), nombre, tipo, len(data), sha, sqlite3.Binary(data)))
+    print(f'{now()}  adjunto {cur.lastrowid} → {tid}: {nombre} ({len(data)} bytes)', file=sys.stderr)
+    return {'adjunto_id': cur.lastrowid, 'ticket_id': tid, 'nombre': nombre, 'tamano': len(data), 'sha256': sha}
+
+
+def tool_obtener_adjunto(db, args):
+    found = leer_adjunto(db, args.get('adjunto_id') or 0)
+    if not found:
+        raise ToolError(f'No existe el adjunto {args.get("adjunto_id")}')
+    nombre, tipo, data = found
+    return {'adjunto_id': int(args['adjunto_id']), 'nombre': nombre, 'tipo': tipo, 'tamano': len(data),
+            'contenido_base64': base64.b64encode(data).decode()}
 
 
 def tool_actualizar_ticket(db, args):
@@ -204,6 +267,21 @@ TOOLS = {
     'obtener_ticket': (tool_obtener_ticket, {
         'description': 'Devuelve un ticket completo, con su conversación y comentarios.',
         'inputSchema': {'type': 'object', 'required': ['id'], 'properties': {'id': str_prop('Número, p. ej. TCK-0001')}},
+    }),
+    'adjuntar_archivo': (tool_adjuntar_archivo, {
+        'description': 'Guarda un archivo de evidencia (pantallazo, log, documento) en un ticket existente.',
+        'inputSchema': {'type': 'object', 'required': ['ticket_id', 'nombre', 'contenido_base64'], 'properties': {
+            'ticket_id': str_prop('Número del ticket, p. ej. TCK-0001'),
+            'nombre': str_prop('Nombre del archivo'),
+            'tipo': str_prop('Tipo MIME, p. ej. image/png'),
+            'contenido_base64': str_prop('Contenido del archivo en base64'),
+        }},
+    }),
+    'obtener_adjunto': (tool_obtener_adjunto, {
+        'description': 'Devuelve un archivo adjunto de un ticket (contenido en base64). Los ids aparecen en obtener_ticket.',
+        'inputSchema': {'type': 'object', 'required': ['adjunto_id'], 'properties': {
+            'adjunto_id': {'type': 'integer', 'description': 'Id del adjunto'},
+        }},
     }),
     'actualizar_ticket': (tool_actualizar_ticket, {
         'description': 'Cambia el estado de un ticket (nuevo, en_proceso, resuelto, cerrado) y/o agrega un comentario.',
@@ -262,13 +340,13 @@ def serve():
 
 def listar():
     db = connect()
-    rows = db.execute('SELECT * FROM tickets ORDER BY num').fetchall()
+    rows = db.execute('SELECT t.*, (SELECT COUNT(*) FROM adjuntos a WHERE a.ticket_id = t.id) AS n FROM tickets t ORDER BY num').fetchall()
     if not rows:
         print('Aún no hay tickets registrados.')
         return
     for t in rows:
         print(f"{t['id']}  {t['fecha'][:16].replace('T', ' ')}  {t['estado']:<10} {t['prioridad'] or '-':<4} {t['tipo'] or '-':<22} {t['titulo']}")
-        print(f"          {t['nombre']} <{t['correo']}>  tel: {t['telefono'] or '-'}  → {t['equipo'] or '-'}")
+        print(f"          {t['nombre']} <{t['correo']}>  tel: {t['telefono'] or '-'}  → {t['equipo'] or '-'}" + (f"  📎 {t['n']}" if t['n'] else ''))
     print(f'\n{len(rows)} ticket(s) en {os.path.relpath(DB_PATH)}')
 
 
