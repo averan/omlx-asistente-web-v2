@@ -74,7 +74,7 @@ Web ─«Enviar solicitud»→ server.py ─/v1/mcp/execute→ oMLX ─stdio→ 
 - Límites: 10 archivos y 10 MB por archivo, 25 MB por solicitud (`MAX_ADJUNTO_MB`, `MAX_ADJUNTOS_TOTAL_MB` en `.env`).
 - `server.py` detecta el tipo real por su contenido: solo admite imágenes PNG/JPEG/GIF/WebP, PDF, Word, Excel y archivos de texto o log. Rechaza ejecutables, SVG o archivos disfrazados, antes de crear el ticket.
 - El widget conserva los originales en memoria hasta el envío. Si el usuario recarga la página antes de enviar, se guarda la imagen reducida o el texto extraído del documento.
-- En la página de gestión, cada ticket muestra sus evidencias: las imágenes se ven en miniatura y el resto se descarga (nunca se abren en el navegador).
+- En la página de gestión, cada ticket muestra sus evidencias y se pueden **visualizar sin descargarlas**: imágenes (clic para tamaño real), PDF (páginas renderizadas con pdf.js), logs y texto (con números de línea y errores resaltados), Word (con formato, en un marco aislado sin scripts) y Excel (tabla por hoja). Se navega entre archivos con ← →, y Esc cierra. El archivo nunca se ejecuta: se dibuja a partir de sus bytes.
 
 **Puesta en marcha (una vez):**
 

@@ -94,6 +94,33 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: v
 .file .info { padding: 7px 9px; font-size: 12px; }
 .file .info b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .clip { color: var(--muted); font-size: 12px; margin-left: 6px; }
+/* visor de evidencias */
+.viewer { position: fixed; inset: 0; z-index: 30; background: rgba(10, 12, 16, .93); display: flex; flex-direction: column; }
+.viewer[hidden] { display: none; }
+.v-bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.v-bar .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-bar .meta { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.v-bar .acts { margin-left: auto; display: flex; gap: 8px; flex: none; }
+.v-bar a.btn { font-weight: 500; text-decoration: none; border-radius: 8px; padding: 7px 14px; border: 1px solid var(--border); color: var(--text); }
+.v-body { flex: 1; overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 20px; }
+.v-body .loading, .v-body .msg { color: #fff; margin: auto; font-size: 14px; }
+.v-body > img { max-width: 100%; max-height: calc(100vh - 110px); margin: auto; border-radius: 6px; background: #fff; box-shadow: 0 10px 40px rgba(0,0,0,.4); cursor: zoom-in; }
+.v-body > img.zoom { max-width: none; max-height: none; cursor: zoom-out; }
+.pdf-pages { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.pdf-pages canvas { background: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.35); max-width: 100%; height: auto; }
+.textview { width: min(1100px, 100%); background: var(--surface); border-radius: 10px; overflow: auto; margin: 0; font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 12px 0; }
+.textview .ln { display: flex; padding: 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.textview .ln::before { content: attr(data-n); color: var(--muted); min-width: 4.5ch; margin-right: 14px; text-align: right; flex: none; user-select: none; }
+.textview .ln.err { background: color-mix(in srgb, var(--p1) 14%, transparent); }
+.textview .ln.warn { background: color-mix(in srgb, var(--p2) 12%, transparent); }
+.docframe { width: min(900px, 100%); height: calc(100vh - 110px); border: none; border-radius: 8px; background: #fff; }
+.sheetview { width: min(1200px, 100%); background: var(--surface); border-radius: 10px; overflow: hidden; }
+.sheet-tabs { display: flex; gap: 4px; padding: 8px 10px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.sheet-tabs button { border-radius: 8px 8px 0 0; padding: 6px 12px; }
+.sheet-tabs button:not(.on) { background: transparent; color: var(--text); border-color: transparent; font-weight: 500; }
+.sheet-wrap { overflow: auto; max-height: calc(100vh - 170px); }
+.sheet-wrap table td, .sheet-wrap table th { border: 1px solid var(--border); padding: 5px 9px; font-size: 12.5px; white-space: pre; }
+.sheet-wrap table th { position: sticky; top: 0; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20; }
 .toast.show { opacity: 1; }
 @media (max-width: 800px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } main, .bar { padding-left: 16px; padding-right: 16px; } }
@@ -130,6 +157,18 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: v
   </div>
   <div class="drawer-body" id="d-body"></div>
 </aside>
+<div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-labelledby="v-name">
+  <div class="v-bar">
+    <span class="name" id="v-name"></span><span class="meta" id="v-meta"></span>
+    <div class="acts">
+      <button class="ghost" id="v-prev" title="Anterior (←)">‹</button>
+      <button class="ghost" id="v-next" title="Siguiente (→)">›</button>
+      <a class="btn" id="v-download" href="#">Descargar</a>
+      <button class="ghost" id="v-close" title="Cerrar (Esc)">✕</button>
+    </div>
+  </div>
+  <div class="v-body" id="v-body"></div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -232,9 +271,11 @@ async function openTicket(id) {
     for (const a of t.adjuntos) {
       const isImg = /^image\/(png|jpeg|gif|webp)$/.test(a.tipo);
       const icon = a.tipo === 'application/pdf' ? '📕' : /sheet|excel/.test(a.tipo) ? '📊' : /word/.test(a.tipo) ? '📘' : '📄';
-      const link = el('a', { className: 'file', href: `/api/adjuntos/${a.id}${isImg ? '' : '?descargar'}`, target: '_blank', rel: 'noopener', title: `${a.nombre}\nSHA-256: ${a.sha256}` },
+      const link = el('a', { className: 'file', href: `/api/adjuntos/${a.id}?descargar`, title: `${a.nombre}\nSHA-256: ${a.sha256}` },
         el('div', { className: 'thumb' }, isImg ? el('img', { src: `/api/adjuntos/${a.id}`, alt: a.nombre, loading: 'lazy' }) : icon),
-        el('div', { className: 'info' }, el('b', { textContent: a.nombre }), el('span', { className: 'muted', textContent: `${size(a.tamano)} · ${isImg ? 'ver' : 'descargar'}` })));
+        el('div', { className: 'info' }, el('b', { textContent: a.nombre }), el('span', { className: 'muted', textContent: `${size(a.tamano)} · ${viewable(a) ? 'ver' : 'descargar'}` })));
+      const i = t.adjuntos.indexOf(a);
+      if (viewable(a)) link.onclick = e => { e.preventDefault(); openViewer(t.adjuntos, i); };
       grid.append(link);
     }
     body.append(el('h3', { textContent: `Evidencias (${t.adjuntos.length})` }), grid);
@@ -255,6 +296,113 @@ async function openTicket(id) {
   }
   $('#drawer').classList.add('open'); $('#drawer').setAttribute('aria-hidden', 'false');
 }
+// ---------- visor de evidencias ----------
+// Todo se dibuja dentro de la página a partir de los bytes (nunca se ejecuta ni se incrusta el archivo tal cual).
+const CDN = 'https://cdnjs.cloudflare.com/ajax/libs/';
+const LIBS = { pdf: CDN + 'pdf.js/3.11.174/pdf.min.js', pdfWorker: CDN + 'pdf.js/3.11.174/pdf.worker.min.js',
+               docx: CDN + 'mammoth/1.6.0/mammoth.browser.min.js', xlsx: CDN + 'xlsx/0.18.5/xlsx.full.min.js' };
+const loaded = {};
+const loadScript = src => loaded[src] ||= new Promise((ok, ko) => {
+  const sc = el('script', { src, async: true }); sc.onload = ok;
+  sc.onerror = () => { delete loaded[src]; ko(new Error('No se pudo cargar el visor (necesita internet la primera vez)')); };
+  document.head.append(sc);
+});
+const kind = a => /^image\/(png|jpeg|gif|webp)$/.test(a.tipo) ? 'image' : a.tipo === 'application/pdf' ? 'pdf'
+  : a.tipo.startsWith('text/') ? 'text' : /wordprocessingml/.test(a.tipo) ? 'docx' : /spreadsheetml|ms-excel/.test(a.tipo) ? 'sheet' : null;
+const viewable = a => !!kind(a);
+let vList = [], vIdx = 0, vToken = 0;
+const bytesOf = async a => { const r = await fetch(`/api/adjuntos/${a.id}?descargar`); if (!r.ok) throw new Error('No se pudo leer el archivo'); return r.arrayBuffer(); };
+
+function openViewer(list, idx) {
+  vList = list.filter(viewable); vIdx = Math.max(0, vList.indexOf(list[idx]));
+  $('#viewer').hidden = false; showCurrent();
+}
+function closeViewer() { vToken++; $('#viewer').hidden = true; $('#v-body').replaceChildren(); }
+function move(d) { if (vList.length > 1) { vIdx = (vIdx + d + vList.length) % vList.length; showCurrent(); } }
+async function showCurrent() {
+  const a = vList[vIdx], token = ++vToken, body = $('#v-body');
+  const size = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+  $('#v-name').textContent = a.nombre;
+  $('#v-meta').textContent = `${size(a.tamano)}` + (vList.length > 1 ? ` · ${vIdx + 1} de ${vList.length}` : '');
+  $('#v-download').href = `/api/adjuntos/${a.id}?descargar`;
+  $('#v-prev').hidden = $('#v-next').hidden = vList.length < 2;
+  body.replaceChildren(el('div', { className: 'loading', textContent: 'Cargando…' }));
+  const stale = () => token !== vToken;
+  try {
+    const k = kind(a);
+    if (k === 'image') {
+      const img = el('img', { src: `/api/adjuntos/${a.id}`, alt: a.nombre, title: 'Clic para ver a tamaño real' });
+      img.onclick = () => img.classList.toggle('zoom');
+      img.onload = () => { if (!stale()) body.replaceChildren(img); };
+      img.onerror = () => { if (!stale()) body.replaceChildren(el('div', { className: 'msg', textContent: 'No se pudo mostrar la imagen.' })); };
+    } else if (k === 'pdf') {
+      const [buf] = await Promise.all([bytesOf(a), loadScript(LIBS.pdf)]);
+      pdfjsLib.GlobalWorkerOptions.workerSrc = LIBS.pdfWorker;
+      const pdf = await pdfjsLib.getDocument({ data: buf, isEvalSupported: false }).promise;
+      if (stale()) return;
+      const pages = el('div', { className: 'pdf-pages' });
+      body.replaceChildren(pages);
+      const n = Math.min(pdf.numPages, 50), width = Math.min(body.clientWidth - 40, 1000);
+      for (let i = 1; i <= n && !stale(); i++) {
+        const page = await pdf.getPage(i), vp1 = page.getViewport({ scale: 1 });
+        const vp = page.getViewport({ scale: (width / vp1.width) * (window.devicePixelRatio || 1) });
+        const c = el('canvas', { width: vp.width, height: vp.height }); c.style.width = width + 'px';
+        pages.append(c);
+        await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      }
+      if (pdf.numPages > n) pages.append(el('div', { className: 'msg', textContent: `Se muestran ${n} de ${pdf.numPages} páginas. Descárgalo para ver el resto.` }));
+    } else if (k === 'text') {
+      const buf = await bytesOf(a); if (stale()) return;
+      let text = new TextDecoder('utf-8').decode(buf);
+      if (text.includes('�')) text = new TextDecoder('latin1').decode(buf);
+      const lines = text.split(/\r?\n/), MAX = 20000;
+      const pre = el('pre', { className: 'textview' });
+      lines.slice(0, MAX).forEach((l, i) => {
+        const cls = /\b(ERROR|FATAL|SEVERE|CRITICAL)\b|Exception|Traceback|\bfailed\b/i.test(l) ? ' err' : /\bWARN(ING)?\b/i.test(l) ? ' warn' : '';
+        const ln = el('span', { className: 'ln' + cls, textContent: l || ' ' });
+        ln.dataset.n = i + 1;
+        pre.append(ln);
+      });
+      if (lines.length > MAX) pre.append(el('span', { className: 'ln', textContent: `… (${lines.length - MAX} líneas más; descárgalo para verlo completo)` }));
+      body.replaceChildren(pre);
+    } else if (k === 'docx') {
+      const [buf] = await Promise.all([bytesOf(a), loadScript(LIBS.docx)]);
+      const { value } = await mammoth.convertToHtml({ arrayBuffer: buf });
+      if (stale()) return;
+      // marco aislado sin scripts: el contenido del documento no puede ejecutar nada ni navegar
+      const frame = el('iframe', { className: 'docframe', title: a.nombre });
+      frame.setAttribute('sandbox', '');
+      frame.srcdoc = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"><style>body{font:15px/1.6 -apple-system,Segoe UI,sans-serif;color:#1a1a1a;max-width:760px;margin:32px auto;padding:0 24px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}img{max-width:100%}</style>${value || '<p><em>(documento vacío)</em></p>'}`;
+      body.replaceChildren(frame);
+    } else if (k === 'sheet') {
+      const [buf] = await Promise.all([bytesOf(a), loadScript(LIBS.xlsx)]);
+      const wb = XLSX.read(buf, { type: 'array' });
+      if (stale()) return;
+      const view = el('div', { className: 'sheetview' }), tabs = el('div', { className: 'sheet-tabs' }), wrap = el('div', { className: 'sheet-wrap' });
+      const show = name => {
+        tabs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.textContent === name));
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, blankrows: false, defval: '' }).slice(0, 1000);
+        const cols = Math.max(0, ...rows.map(r => r.length));
+        const table = el('table');
+        const head = el('tr', {}, el('th', { textContent: '' }));
+        for (let c = 0; c < cols; c++) head.append(el('th', { textContent: XLSX.utils.encode_col(c) }));
+        table.append(el('thead', {}, head));
+        const tb = el('tbody');
+        rows.forEach((r, i) => { const tr = el('tr', {}, el('th', { textContent: i + 1 })); for (let c = 0; c < cols; c++) tr.append(el('td', { textContent: r[c] ?? '' })); tb.append(tr); });
+        table.append(tb); wrap.replaceChildren(table);
+      };
+      for (const name of wb.SheetNames) tabs.append(el('button', { type: 'button', textContent: name, onclick: () => show(name) }));
+      view.append(tabs, wrap); body.replaceChildren(view); show(wb.SheetNames[0]);
+    }
+  } catch (e) {
+    if (!stale()) body.replaceChildren(el('div', { className: 'msg', textContent: `${e.message}. Puedes descargarlo con el botón de arriba.` }));
+  }
+}
+$('#v-close').onclick = closeViewer;
+$('#v-prev').onclick = () => move(-1);
+$('#v-next').onclick = () => move(1);
+$('#viewer').addEventListener('click', e => { if (e.target.id === 'v-body') closeViewer(); });
+
 function closeDrawer() { current = null; $('#drawer').classList.remove('open'); $('#drawer').setAttribute('aria-hidden', 'true'); document.querySelectorAll('tbody tr.sel').forEach(tr => tr.classList.remove('sel')); }
 
 for (const [k, v] of Object.entries(ESTADOS)) $('#f-estado').append(el('option', { value: k, textContent: v }));
@@ -263,7 +411,13 @@ $('#f-prioridad').onchange = load;
 let qTimer; $('#q').oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(load, 250); };
 $('#refresh').onclick = load;
 $('#d-close').onclick = closeDrawer;
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+document.addEventListener('keydown', e => {
+  if (!$('#viewer').hidden) {
+    if (e.key === 'Escape') closeViewer(); else if (e.key === 'ArrowLeft') move(-1); else if (e.key === 'ArrowRight') move(1);
+    return;
+  }
+  if (e.key === 'Escape') closeDrawer();
+});
 load();
 setInterval(() => { if (!document.hidden) load(); }, 15000);
 </script>
