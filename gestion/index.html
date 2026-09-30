@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gestión de tickets · Faena</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #fff; --surface-2: #f1f3f6; --text: #16181d; --muted: #6b7280; --border: #e3e6eb;
+  --accent: #1d5bbf; --accent-soft: #e8f0fc; --accent-text: #fff;
+  --nuevo: #1d5bbf; --en_proceso: #b7791f; --resuelto: #1f9d55; --cerrado: #6b7280;
+  --p1: #d64545; --p2: #dd6b20; --p3: #3182ce; --p4: #718096;
+  --shadow: 0 1px 2px rgba(16,24,40,.05); --drawer-shadow: -12px 0 40px rgba(16,24,40,.12);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0f1115; --surface: #171a21; --surface-2: #1e222a; --text: #e8eaed; --muted: #9aa3ae; --border: #2a303a;
+  --accent: #6aa0ff; --accent-soft: #1c2940; --accent-text: #0b1220;
+  --nuevo: #6aa0ff; --en_proceso: #f0b44c; --resuelto: #48c78e; --cerrado: #9aa3ae;
+  --p1: #ff6b6b; --p2: #ff9f5a; --p3: #63b3ed; --p4: #a0aec0;
+  --shadow: none; --drawer-shadow: -12px 0 40px rgba(0,0,0,.5); color-scheme: dark;
+} }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+header { background: var(--surface); border-bottom: 1px solid var(--border); }
+.bar { max-width: 1280px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; gap: 12px; }
+.bar img { width: 30px; height: 30px; }
+.bar h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; }
+.bar .sub { color: var(--muted); font-size: 12.5px; }
+.bar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; }
+main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 40px; }
+.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); cursor: pointer; text-align: left; font: inherit; color: inherit; transition: border-color .15s; }
+.stat:hover, .stat.active { border-color: var(--accent); }
+.stat .k { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.stat .v { font-size: 26px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; align-items: center; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); }
+.filters input[type=search] { flex: 1; min-width: 220px; }
+button { font: inherit; font-weight: 600; cursor: pointer; border-radius: 8px; padding: 7px 14px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); }
+button.ghost { background: transparent; color: var(--text); border-color: var(--border); font-weight: 500; }
+button:disabled { opacity: .5; cursor: default; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; background: var(--surface-2); }
+td.title { white-space: normal; min-width: 260px; font-weight: 500; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--surface-2); }
+tbody tr.sel { background: var(--accent-soft); }
+tbody tr:last-child td { border-bottom: none; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.muted { color: var(--muted); }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: color-mix(in srgb, var(--c) 14%, transparent); color: var(--c); }
+.badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+.prio { font-weight: 700; font-size: 12.5px; color: var(--c); }
+.empty { padding: 48px; text-align: center; color: var(--muted); }
+/* panel de detalle */
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100%); background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--drawer-shadow); transform: translateX(100%); transition: transform .22s ease; display: flex; flex-direction: column; z-index: 10; }
+.drawer.open { transform: none; }
+.drawer-head { padding: 18px 22px 14px; border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: flex-start; }
+.drawer-head h2 { font-size: 17px; margin: 4px 0 0; line-height: 1.35; }
+.drawer-head .x { margin-left: auto; padding: 4px 10px; }
+.drawer-body { flex: 1; overflow-y: auto; padding: 18px 22px 24px; }
+.fields { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; margin: 0 0 18px; }
+.fields dt { color: var(--muted); font-size: 12.5px; }
+.fields dd { margin: 0; overflow-wrap: anywhere; }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 22px 0 10px; }
+.desc { background: var(--surface-2); border-radius: 10px; padding: 12px 14px; white-space: pre-wrap; }
+.actions { background: var(--surface-2); border-radius: 10px; padding: 14px; display: grid; gap: 10px; }
+.actions .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.actions textarea { width: 100%; min-height: 64px; resize: vertical; }
+.actions .msg { font-size: 12.5px; }
+.timeline { list-style: none; margin: 0; padding: 0; border-left: 2px solid var(--border); }
+.timeline li { position: relative; padding: 0 0 12px 16px; }
+.timeline li::before { content: ''; position: absolute; left: -6px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.timeline .when { font-size: 12px; color: var(--muted); }
+.chat { display: flex; flex-direction: column; gap: 8px; }
+.bubble { max-width: 88%; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; }
+.bubble.user { align-self: flex-end; background: var(--accent-soft); }
+.bubble.assistant { align-self: flex-start; background: var(--surface-2); }
+.bubble .att { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20; }
+.toast.show { opacity: 1; }
+@media (max-width: 800px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } main, .bar { padding-left: 16px; padding-right: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <img src="/logo.png" alt="">
+    <div><h1>Gestión de tickets</h1><div class="sub">Mesa de Ayuda · Faena</div></div>
+    <div class="right"><span id="updated"></span><button class="ghost" id="refresh">Actualizar</button></div>
+  </div>
+</header>
+
+<main>
+  <div class="stats" id="stats"></div>
+  <div class="filters">
+    <input type="search" id="q" placeholder="Buscar por título, descripción, nombre o correo…">
+    <select id="f-estado"><option value="">Todos los estados</option></select>
+    <select id="f-prioridad"><option value="">Todas las prioridades</option><option>P1</option><option>P2</option><option>P3</option><option>P4</option></select>
+  </div>
+  <div class="card"><div class="table-wrap">
+    <table>
+      <thead><tr><th>Ticket</th><th>Fecha</th><th>Estado</th><th>Prio.</th><th>Título</th><th>Solicitante</th><th>Equipo</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div><div class="empty" id="empty" hidden>No hay tickets con estos filtros.</div></div>
+</main>
+
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div><div id="d-meta"></div><h2 id="d-title"></h2></div>
+    <button class="ghost x" id="d-close" aria-label="Cerrar">✕</button>
+  </div>
+  <div class="drawer-body" id="d-body"></div>
+</aside>
+<div class="toast" id="toast"></div>
+
+<script>
+const ESTADOS = { nuevo: 'Nuevo', en_proceso: 'En proceso', resuelto: 'Resuelto', cerrado: 'Cerrado' };
+const $ = s => document.querySelector(s);
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+const fmt = iso => { const d = new Date(iso.replace(/([+-]\d\d)(\d\d)$/, '$1:$2')); return isNaN(d) ? iso : d.toLocaleString('es', { dateStyle: 'short', timeStyle: 'short' }); };
+const estadoBadge = e => el('span', { className: 'badge', textContent: ESTADOS[e] || e, style: `--c: var(--${e in ESTADOS ? e : 'cerrado'})` });
+const prio = p => el('span', { className: 'prio', textContent: (p || '-').slice(0, 2), style: `--c: var(--${(p || '').slice(0, 2).toLowerCase() || 'p4'}, var(--muted))` });
+function toast(t) { const n = $('#toast'); n.textContent = t; n.classList.add('show'); clearTimeout(n._t); n._t = setTimeout(() => n.classList.remove('show'), 2400); }
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json', 'X-Gestion': '1', ...(opts.headers || {}) } });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || 'Error ' + res.status);
+  return data;
+}
+
+let current = null;   // id del ticket abierto
+let estadoFiltro = '';
+
+async function load() {
+  const qs = new URLSearchParams();
+  if (estadoFiltro) qs.set('estado', estadoFiltro);
+  if ($('#f-prioridad').value) qs.set('prioridad', $('#f-prioridad').value);
+  if ($('#q').value.trim()) qs.set('texto', $('#q').value.trim());
+  let data;
+  try { data = await api('/api/tickets?' + qs); }
+  catch (e) { toast('No se pudo cargar: ' + e.message); return; }
+  renderStats(data);
+  const tb = $('#rows'); tb.innerHTML = '';
+  for (const t of data.tickets) {
+    const tr = el('tr', {},
+      el('td', { className: 'mono', textContent: t.id }),
+      el('td', { className: 'muted', textContent: fmt(t.fecha) }),
+      el('td', {}, estadoBadge(t.estado)),
+      el('td', {}, prio(t.prioridad)),
+      el('td', { className: 'title', textContent: t.titulo }),
+      el('td', {}, el('div', { textContent: t.nombre }), el('div', { className: 'muted', textContent: t.correo })),
+      el('td', { className: 'muted', textContent: t.equipo || '-' }));
+    if (t.id === current) tr.classList.add('sel');
+    tr.onclick = () => openTicket(t.id);
+    tb.append(tr);
+  }
+  $('#empty').hidden = data.tickets.length > 0;
+  $('#updated').textContent = 'Actualizado ' + new Date().toLocaleTimeString('es', { timeStyle: 'short' });
+}
+
+function renderStats(data) {
+  const c = data.conteo || {};
+  const items = [['', 'Todos', Object.values(c).reduce((a, b) => a + b, 0), 'var(--text)'],
+    ...Object.entries(ESTADOS).map(([k, v]) => [k, v, c[k] || 0, `var(--${k})`])];
+  const box = $('#stats'); box.innerHTML = '';
+  for (const [k, label, n, color] of items) {
+    const b = el('button', { className: 'stat' + (estadoFiltro === k ? ' active' : ''), type: 'button' },
+      el('div', { className: 'k', innerHTML: `<span style="width:8px;height:8px;border-radius:50%;background:${color}"></span>` }, label),
+      el('div', { className: 'v', textContent: n }));
+    if (k === 'nuevo' && data.p1_abiertos) b.querySelector('.k').append(el('span', { className: 'prio', style: '--c: var(--p1)', textContent: ` · ${data.p1_abiertos} P1 abiertos` }));
+    b.onclick = () => { estadoFiltro = k; $('#f-estado').value = k; load(); };
+    box.append(b);
+  }
+}
+
+async function openTicket(id) {
+  current = id;
+  document.querySelectorAll('tbody tr').forEach(tr => tr.classList.toggle('sel', tr.firstChild.textContent === id));
+  let t;
+  try { t = await api('/api/tickets/' + encodeURIComponent(id)); }
+  catch (e) { toast(e.message); return; }
+  $('#d-meta').replaceChildren(el('span', { className: 'mono muted', textContent: t.id + '  ' }), estadoBadge(t.estado), ' ', prio(t.prioridad));
+  $('#d-title').textContent = t.titulo;
+  const body = $('#d-body'); body.innerHTML = '';
+
+  const dl = el('dl', { className: 'fields' });
+  for (const [k, v] of [['Tipo', t.tipo], ['Categoría', t.categoria], ['Solicitante', t.nombre], ['Correo', t.correo], ['Teléfono', t.telefono],
+    ['Equipo resolutor', t.equipo], ['Evidencias', t.evidencias], ['Creado', fmt(t.fecha)], ['Actualizado', fmt(t.actualizado)]])
+    dl.append(el('dt', { textContent: k }), el('dd', { textContent: v || '—' }));
+  body.append(dl, el('h3', { textContent: 'Descripción' }), el('div', { className: 'desc', textContent: t.descripcion }));
+
+  // acciones: cambiar estado y/o comentar
+  const sel = el('select', {}); for (const [k, v] of Object.entries(ESTADOS)) sel.append(el('option', { value: k, textContent: v, selected: k === t.estado }));
+  const txt = el('textarea', { placeholder: 'Comentario para el historial (opcional)…' });
+  const save = el('button', { type: 'button', textContent: 'Guardar' });
+  const msg = el('span', { className: 'msg muted' });
+  save.onclick = async () => {
+    const args = {};
+    if (sel.value !== t.estado) args.estado = sel.value;
+    if (txt.value.trim()) args.comentario = txt.value.trim();
+    if (!Object.keys(args).length) { msg.textContent = 'Cambia el estado o escribe un comentario.'; return; }
+    save.disabled = true; msg.textContent = 'Guardando…';
+    try { await api('/api/tickets/' + encodeURIComponent(t.id), { method: 'POST', body: JSON.stringify(args) }); toast(`${t.id} actualizado`); await load(); await openTicket(t.id); }
+    catch (e) { msg.textContent = e.message; save.disabled = false; }
+  };
+  body.append(el('h3', { textContent: 'Gestionar' }),
+    el('div', { className: 'actions' }, el('div', { className: 'row' }, el('label', { className: 'muted', textContent: 'Estado' }), sel), txt, el('div', { className: 'row' }, save, msg)));
+
+  if (t.comentarios.length) {
+    const ul = el('ul', { className: 'timeline' });
+    for (const c of t.comentarios) ul.append(el('li', {}, el('div', { className: 'when', textContent: fmt(c.fecha) }), el('div', { textContent: c.texto })));
+    body.append(el('h3', { textContent: 'Historial' }), ul);
+  }
+  if (t.conversacion.length) {
+    const chat = el('div', { className: 'chat' });
+    for (const m of t.conversacion) {
+      const b = el('div', { className: 'bubble ' + (m.rol === 'user' ? 'user' : 'assistant'), textContent: m.texto || '' });
+      if (m.adjuntos?.length) b.append(el('span', { className: 'att', textContent: '📎 ' + m.adjuntos.join(', ') }));
+      chat.append(b);
+    }
+    body.append(el('h3', { textContent: 'Conversación con el asistente' }), chat);
+  }
+  $('#drawer').classList.add('open'); $('#drawer').setAttribute('aria-hidden', 'false');
+}
+function closeDrawer() { current = null; $('#drawer').classList.remove('open'); $('#drawer').setAttribute('aria-hidden', 'true'); document.querySelectorAll('tbody tr.sel').forEach(tr => tr.classList.remove('sel')); }
+
+for (const [k, v] of Object.entries(ESTADOS)) $('#f-estado').append(el('option', { value: k, textContent: v }));
+$('#f-estado').onchange = e => { estadoFiltro = e.target.value; load(); };
+$('#f-prioridad').onchange = load;
+let qTimer; $('#q').oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(load, 250); };
+$('#refresh').onclick = load;
+$('#d-close').onclick = closeDrawer;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+load();
+setInterval(() => { if (!document.hidden) load(); }, 15000);
+</script>
+</body>
+</html>

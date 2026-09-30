@@ -15,6 +15,7 @@ config.js               Configuración de la web: nombre, saludo, modelo, límit
 server.py               Servidor de la web + puente seguro hacia oMLX (guarda la API key)
 publicar.sh             Publica la web en internet con un túnel de Cloudflare
 mcp_tickets.py          Servidor MCP «tickets»: registro de solicitudes en SQLite
+gestion.py, gestion/    Página de gestión de tickets (solo local, puerto 5175)
 mcp.example.json        Plantilla para conectar ese servidor MCP a oMLX
 .env                    Tu API key y ajustes del servidor (privado, ignorado por git)
 contexto.js             Qué sabe el asistente, de qué habla y cómo responde
@@ -76,9 +77,9 @@ Web ─«Enviar solicitud»→ server.py ─/v1/mcp/execute→ oMLX ─stdio→ 
 
 **Ver y gestionar tickets:**
 
-```bash
-python3 mcp_tickets.py listar
-```
+- **Página de gestión**: abre http://localhost:5175 mientras corre `server.py` o `publicar.sh`. Muestra el resumen por estado, filtros y búsqueda, y el detalle de cada ticket con su conversación; permite cambiar el estado y agregar comentarios al historial. Se actualiza sola cada 15 s.
+  Es **solo local**: escucha en un puerto aparte que el túnel no publica, rechaza otros hosts y peticiones de otros sitios. Se puede cambiar el puerto con `ADMIN_PORT` en `.env` (`0` la desactiva) o abrirla sola con `python3 gestion.py`.
+- **Terminal**: `python3 mcp_tickets.py listar`, o consultas SQL con `sqlite3 -box tickets/tickets.db "SELECT id, estado, titulo FROM tickets;"`.
 
 Con `expose_tools` activado en oMLX, también puedes preguntar desde **tu** chat de oMLX («¿qué tickets P1 hay?», «pasa el TCK-0004 a en_proceso»). El mismo servidor se puede conectar a **Claude Desktop** o **Claude Code** con esta configuración:
 

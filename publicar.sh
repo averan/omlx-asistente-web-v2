@@ -49,6 +49,8 @@ done
 echo
 echo "${bold}${green}✓ Web publicada en:${reset}  ${bold}$URL${reset}"
 echo "  Local:              http://localhost:$PORT"
+ADMIN_PORT=$(grep -E '^ADMIN_PORT=' .env | cut -d= -f2); ADMIN_PORT=${ADMIN_PORT:-5175}
+[ "$ADMIN_PORT" != "0" ] && echo "  Gestión de tickets: http://localhost:$ADMIN_PORT  (solo desde este Mac, no se publica)"
 echo "  Comparte la URL pública. Cambia cada vez que vuelves a ejecutar este script."
 echo "  Mantén este Mac encendido y oMLX en marcha. Ctrl+C para dejar de publicar."
 echo
