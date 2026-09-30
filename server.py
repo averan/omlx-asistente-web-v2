@@ -7,11 +7,12 @@ Servidor de la web del asistente + puente seguro hacia oMLX.
   API key en el servidor (nunca llega al navegador).
 - Protege el Mac: límite de tamaño, de max_tokens, de generaciones simultáneas
   y de mensajes por minuto por visitante.
-- Registra las solicitudes validadas por los usuarios (POST /api/tickets) en
-  tickets/tickets.jsonl con un número TCK-0001, TCK-0002…
+- Registra las solicitudes validadas por los usuarios (POST /api/tickets) en la
+  base de datos de tickets a través de MCP: oMLX ejecuta la herramienta
+  tickets__crear_ticket del servidor mcp_tickets.py (ver mcp.json).
 
 Uso:  python3 server.py            (configuración en .env, ver .env.example)
-      python3 server.py tickets    (lista las solicitudes registradas)
+      python3 mcp_tickets.py listar   (lista los tickets registrados)
 """
 import http.client
 import json
@@ -58,14 +59,13 @@ PUBLIC_DIRS = ('css/', 'assistant/', 'img/')
 PROXY_GET = {'/health', '/v1/models', '/v1/models/status'}
 PROXY_CHAT = '/v1/chat/completions'
 TICKETS_API = '/api/tickets'
-TICKETS_FILE = os.path.join(ROOT, 'tickets', 'tickets.jsonl')
+TICKETS_MCP_TOOL = ENV.get('TICKETS_MCP_TOOL', 'tickets__crear_ticket')
 TICKETS_PER_MIN = int(ENV.get('TICKETS_PER_MIN', 5))
 # campo -> largo máximo; los obligatorios se validan aparte
 TICKET_FIELDS = {'tipo': 60, 'titulo': 200, 'categoria': 200, 'descripcion': 4000, 'nombre': 120,
                  'correo': 200, 'telefono': 60, 'prioridad': 60, 'equipo': 120, 'evidencias': 600}
 TICKET_REQUIRED = ('titulo', 'descripcion', 'nombre', 'correo')
 EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
-tickets_lock = threading.Lock()
 
 slots = threading.BoundedSemaphore(MAX_CONCURRENT)
 hits = defaultdict(deque)
@@ -83,23 +83,6 @@ def rate_limited(key, limit=RATE_PER_MIN):
         q.append(now)
         return False
 
-
-def read_tickets():
-    try:
-        with open(TICKETS_FILE, encoding='utf-8') as f:
-            return [json.loads(line) for line in f if line.strip()]
-    except FileNotFoundError:
-        return []
-
-
-def save_ticket(ticket):
-    """Asigna el siguiente número TCK-NNNN y agrega el ticket al registro."""
-    with tickets_lock:
-        os.makedirs(os.path.dirname(TICKETS_FILE), exist_ok=True)
-        ticket['id'] = f'TCK-{len(read_tickets()) + 1:04d}'
-        with open(TICKETS_FILE, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(ticket, ensure_ascii=False) + '\n')
-    return ticket['id']
 
 
 def upstream(method, path, body=None, timeout=600):
@@ -184,10 +167,7 @@ class Handler(BaseHTTPRequestHandler):
         if not EMAIL_RE.match(ticket['correo']):
             return self.error(400, 'El correo no parece válido. Corrígelo y vuelve a enviar.')
         conv = data.get('conversacion') if isinstance(data.get('conversacion'), list) else []
-        record = {
-            'id': None,
-            'fecha': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
-            'estado': 'nuevo',
+        args = {
             **ticket,
             'conversacion': [
                 {'rol': str(m.get('role', ''))[:20], 'texto': str(m.get('content', ''))[:4000],
@@ -196,9 +176,21 @@ class Handler(BaseHTTPRequestHandler):
             ],
             'ip': ip,
         }
-        tid = save_ticket(record)
+        # registro en la base de datos a través de MCP (oMLX ejecuta la herramienta del servidor «tickets»)
+        try:
+            conn, res = upstream('POST', '/v1/mcp/execute',
+                                 json.dumps({'tool_name': TICKETS_MCP_TOOL, 'arguments': args}).encode(), timeout=30)
+            out = json.loads(res.read() or b'{}')
+            conn.close()
+            if res.status != 200 or out.get('is_error'):
+                raise RuntimeError(out.get('error_message') or out.get('content') or out.get('detail') or res.status)
+            result = json.loads(out['content']) if isinstance(out.get('content'), str) else out.get('content')
+            tid, fecha = result['id'], result['fecha']
+        except Exception as e:  # noqa: BLE001 — cualquier fallo del registro se informa igual al usuario
+            print(f'{time.strftime("%H:%M:%S")}  TICKET ERROR  {e}', flush=True)
+            return self.error(503, 'No se pudo registrar la solicitud en este momento. Inténtalo en unos minutos.')
         print(f'{time.strftime("%H:%M:%S")}  TICKET {tid}  {ticket["tipo"] or "-"} · {ticket["titulo"]} · {ticket["nombre"]} <{ticket["correo"]}>', flush=True)
-        self.send_json(201, {'id': tid, 'fecha': record['fecha']})
+        self.send_json(201, {'id': tid, 'fecha': fecha})
 
     # ---------- archivos estáticos ----------
     def serve_static(self, path):
@@ -257,6 +249,9 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self.error(400, 'Petición no válida.'); return 400
         body['max_tokens'] = min(int(body.get('max_tokens') or MAX_TOKENS), MAX_TOKENS)
+        # los visitantes nunca pueden usar herramientas (p. ej. las MCP de tickets que oMLX añade a los chats)
+        body.pop('tools', None)
+        body['tool_choice'] = 'none'
 
         if not slots.acquire(blocking=False):
             self.error(503, 'El asistente está ocupado atendiendo otras consultas. Inténtalo en unos segundos.'); return 503
@@ -288,20 +283,9 @@ class Handler(BaseHTTPRequestHandler):
             slots.release()
 
 
-def list_tickets():
-    tickets = read_tickets()
-    if not tickets:
-        print('Aún no hay solicitudes registradas.')
-        return
-    for t in tickets:
-        print(f"{t['id']}  {t['fecha'][:16].replace('T', ' ')}  {t['prioridad'] or '-':<4} {t['tipo'] or '-':<22} {t['titulo']}")
-        print(f"          {t['nombre']} <{t['correo']}>  tel: {t['telefono'] or '-'}  → {t['equipo'] or '-'}")
-    print(f'\n{len(tickets)} solicitud(es). Detalle completo en {os.path.relpath(TICKETS_FILE)}')
-
-
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == 'tickets':
-        return list_tickets()
+        return print('Los tickets ahora están en la base de datos. Usa:  python3 mcp_tickets.py listar')
     if not API_KEY:
         print('Aviso: OMLX_API_KEY no está definida en .env; se llamará a oMLX sin clave.')
     srv = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)

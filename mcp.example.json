@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tickets": {
+      "command": "/usr/bin/python3",
+      "args": ["/RUTA/ABSOLUTA/A/omlx-asistente-web-v2/mcp_tickets.py"]
+    }
+  }
+}

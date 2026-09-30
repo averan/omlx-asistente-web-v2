@@ -14,6 +14,8 @@ assistant/assistant.js  Lógica del widget (se monta solo en <body>)
 config.js               Configuración de la web: nombre, saludo, modelo, límites…
 server.py               Servidor de la web + puente seguro hacia oMLX (guarda la API key)
 publicar.sh             Publica la web en internet con un túnel de Cloudflare
+mcp_tickets.py          Servidor MCP «tickets»: registro de solicitudes en SQLite
+mcp.example.json        Plantilla para conectar ese servidor MCP a oMLX
 .env                    Tu API key y ajustes del servidor (privado, ignorado por git)
 contexto.js             Qué sabe el asistente, de qué habla y cómo responde
 img/                    Logo de Faena (símbolo, texto) y favicons
@@ -56,17 +58,38 @@ El script arranca `server.py`, abre un túnel gratuito de Cloudflare y muestra l
 
 El asistente atiende dos tipos de pedidos: **problemas** (incidentes) y **solicitudes de servicio** (licencias, accesos a Jira u otros sistemas, VPN, instalación de software, equipos). Reúne los datos, pide nombre y correo (y teléfono opcional), **redacta él mismo la descripción** y presenta la solicitud para que el usuario la valide.
 
-Debajo de la solicitud aparecen los botones **Enviar solicitud** y **Corregir**. Al enviarla, `server.py` la guarda con un número correlativo (`TCK-0001`, `TCK-0002`…) y el usuario ve ese número en el chat.
+Debajo de la solicitud aparecen los botones **Enviar solicitud** y **Corregir**. Al enviarla, el usuario ve su número de ticket (`TCK-0001`, `TCK-0002`…).
 
-- Las solicitudes se guardan en `tickets/tickets.jsonl` (una por línea, con la conversación completa). Esa carpeta es privada: no se sirve por la web ni se sube a git.
-- Para verlas:
+### Registro en base de datos vía MCP
 
-  ```bash
-  python3 server.py tickets
-  ```
+```
+Web ─«Enviar solicitud»→ server.py ─/v1/mcp/execute→ oMLX ─stdio→ mcp_tickets.py → tickets/tickets.db (SQLite)
+```
+
+`mcp_tickets.py` es un servidor **MCP** (sin dependencias, Python 3.9+) con 4 herramientas: `crear_ticket`, `listar_tickets`, `obtener_ticket` y `actualizar_ticket` (estados `nuevo`, `en_proceso`, `resuelto`, `cerrado`, con historial de comentarios). La base de datos `tickets/` es privada: no se sirve por la web ni se sube a git.
+
+**Puesta en marcha (una vez):**
+
+1. `cp mcp.example.json mcp.json` y pon la ruta absoluta de `mcp_tickets.py`.
+2. En oMLX: panel → Settings → MCP → *Config path* = ruta de tu `mcp.json` (o `mcp.config_path` en `~/.omlx/settings.json`).
+3. Reinicia oMLX (`omlx restart`). En `http://localhost:8000/health` debe aparecer `"mcp": {"servers_connected": 1, "tools_available": 4}`.
+
+**Ver y gestionar tickets:**
+
+```bash
+python3 mcp_tickets.py listar
+```
+
+Con `expose_tools` activado en oMLX, también puedes preguntar desde **tu** chat de oMLX («¿qué tickets P1 hay?», «pasa el TCK-0004 a en_proceso»). El mismo servidor se puede conectar a **Claude Desktop** o **Claude Code** con esta configuración:
+
+```json
+{ "mcpServers": { "tickets": { "command": "/usr/bin/python3", "args": ["/RUTA/ABSOLUTA/A/mcp_tickets.py"] } } }
+```
+
+**Seguridad:** oMLX añade las herramientas MCP a todos los chats, pero `server.py` fuerza `tool_choice: "none"` en los chats de la web pública y no expone ningún endpoint `/v1/mcp/*`. Los visitantes no pueden listar ni modificar tickets; solo crear el suyo con el botón. Si el registro falla, el usuario recibe un aviso y puede reintentar.
 
 - El catálogo de servicios, la lista de software autorizado, las prioridades y los equipos resolutores se editan en `contexto.js`.
-- Más adelante `server.py` puede reenviar cada solicitud a un sistema real (Jira Service Management, GLPI, Freshdesk, correo…) sin cambiar la web.
+- Para usar un sistema de tickets real (Jira Service Management, GLPI, Freshdesk…) basta con otro servidor MCP con una herramienta de creación y apuntar `TICKETS_MCP_TOOL` (en `.env`) a ella.
 
 ## Configuración (`config.js`)
 

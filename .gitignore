@@ -8,3 +8,6 @@ config.local.js
 # Sistema y editor
 .DS_Store
 .claude/
+
+# Configuración MCP local (contiene rutas de este equipo)
+mcp.json
